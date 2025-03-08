@@ -9,7 +9,7 @@ def main():
     db_data = fetch_data_from_databases(user, password, host, databases)
 
     # Example: Access a table's DataFrame
-    # print(db_data["yelp_hotel"]["some_table"].head())
+    # print(db_data["yelp_hotel"]["some_table"].head()) 
 
 if __name__ == "__main__":
     main()

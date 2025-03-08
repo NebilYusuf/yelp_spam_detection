@@ -37,4 +37,4 @@ def fetch_data_from_databases(user, password, host, databases):
         db_data[db] = {table: fetch_table_data(engine, table) for table in tables}
     
     print("\n✅ Data fetching complete!")
-    return db_data
+    return db_data 
