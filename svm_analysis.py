@@ -1,11 +1,11 @@
 from database_utils import get_db_credentials, create_db_engine
 import pandas as pd
 import numpy as np
-from sklearn.svm import LinearSVC  # Changed to LinearSVC for faster training
+from sklearn.svm import LinearSVC
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_selection import mutual_info_classif
 import nltk
 from nltk.tag import pos_tag
@@ -17,6 +17,8 @@ from joblib import Parallel, delayed
 import multiprocessing
 nltk.download('punkt', quiet=True)
 nltk.download('averaged_perceptron_tagger', quiet=True)
+nltk.download('punkt_tab')
+nltk.download('averaged_perceptron_tagger_eng')
 
 def process_fold(fold, X, y, train_idx, test_idx):
     """Process a single cross-validation fold."""
@@ -35,7 +37,7 @@ def process_fold(fold, X, y, train_idx, test_idx):
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    # Train SVM (using LinearSVC for speed)
+    # Train SVM
     svm = LinearSVC(dual=False, max_iter=1000)
     svm.fit(X_train_scaled, y_train)
     
@@ -72,10 +74,7 @@ def get_review_data(engine, feature_type, batch_size=1000):
             WHEN r.flagged IN ('Y', 'YR') THEN 1
             ELSE 0
         END as is_fake,
-        rf.Review_Body,
-        rf.EXT as word_unigrams,
-        rf.DEV as word_bigrams,
-        rf.Filtered
+        rf.Review_Body
     FROM review r
     LEFT JOIN review_features rf ON r.reviewID = rf.Review_ID
     WHERE r.reviewID IS NOT NULL
@@ -103,27 +102,47 @@ def get_review_data(engine, feature_type, batch_size=1000):
         print("Using Word Unigrams feature set")
         vectorizer = CountVectorizer(
             min_df=5,
-            max_features=10000,  # Limit features for speed
-            binary=True,  # Use binary features instead of counts
-            dtype=np.float32  # Use float32 for memory efficiency
+            max_features=10000,
+            binary=True,
+            dtype=np.float32
         )
         
-        # Create progress bar for tokenization
-        tokens = []
-        with tqdm(total=len(review_text), desc="Tokenizing reviews") as pbar:
-            for text in review_text:
-                tokens.append(text)
-                pbar.update(1)
-        
-        print("Vectorizing features...")
-        features = vectorizer.fit_transform(tokens)
+        features = vectorizer.fit_transform(review_text)
         print(f"Generated {features.shape[1]} features")
         
+    elif feature_type == "POS":
+        # POS tag features using `pos_tag_sents`
+        print("Using POS tag feature set")
+        
+        # Tokenize all reviews at once
+        tokenized_reviews = [word_tokenize(str(text)) for text in review_text]
+        
+        # Use pos_tag_sents to process multiple tokenized sentences at once
+        pos_sequences = []
+        with tqdm(total=len(tokenized_reviews), desc="Extracting POS tags") as pbar:
+            batch_size = 500  # Adjust batch size for efficiency
+            for i in range(0, len(tokenized_reviews), batch_size):
+                batch = tokenized_reviews[i:i+batch_size]
+                pos_batch = nltk.pos_tag_sents(batch)
+                pos_sequences.extend([" ".join(tag for _, tag in pos_tags) for pos_tags in pos_batch])
+                pbar.update(len(batch))
+        
+        # Vectorize POS sequences
+        vectorizer = CountVectorizer(
+            min_df=5,
+            max_features=5000,
+            binary=True,
+            dtype=np.float32
+        )
+        features = vectorizer.fit_transform(pos_sequences)
+        print(f"Generated {features.shape[1]} POS features")
+    
     else:
         raise ValueError(f"Feature type {feature_type} not implemented for testing")
     
     print(f"Feature extraction completed in {time.time() - start_time:.2f} seconds")
     return features, df['is_fake'].values
+
 
 def evaluate_model(X, y):
     """Perform 5-fold CV and return evaluation metrics using parallel processing."""
@@ -131,7 +150,7 @@ def evaluate_model(X, y):
     start_time = time.time()
     
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    n_jobs = max(1, multiprocessing.cpu_count() - 1)  # Use all CPUs except one
+    n_jobs = max(1, multiprocessing.cpu_count() - 1)
     
     # Get all fold indices first
     fold_indices = list(enumerate(skf.split(X, y), 1))
@@ -173,9 +192,10 @@ def analyze_features():
     hotel_engine = create_db_engine(user, password, host, "yelp_hotel")
     restaurant_engine = create_db_engine(user, password, host, "yelp_res")
     
-    # Test only Word Unigrams (WU) feature set
+    # Test both Word Unigrams (WU) and POS feature sets
     feature_sets = [
-        ("Word unigrams (WU)", "WU")
+        ("Word unigrams (WU)", "WU"),
+        ("POS tags (POS)", "POS")
     ]
     
     # Store results for final table
@@ -223,4 +243,4 @@ def analyze_features():
     print(f"\nTotal analysis completed in {total_time/60:.1f} minutes")
 
 if __name__ == "__main__":
-    analyze_features() 
+    analyze_features()
